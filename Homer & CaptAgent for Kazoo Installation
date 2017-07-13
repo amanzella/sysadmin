@@ -1,0 +1,165 @@
+Hi everyone,
+
+I've recently installed and configured a Homer Server and CaptAgent for my Kazoo Cluster. Since we have a nice new forum I wanted to create a quick and easy guide on what I've done to get homer working with Kazoo.
+
+I used Debian for my Homer Server and the very easy to use "Install Script"
+
+Homer Server:
+
+Run the following script on your homer server
+
+bash <( curl -s https://cdn.rawgit.com/sipcapture/homer-installer/master/homer_installer.sh )
+Follow the prompts and at the end, you will have a working Homer Server.
+
+ 
+
+Now onto Kazoo and CaptAgent
+
+CaptAgent v6 Install
+
+You will do this on every FreeSwitch and Kamailio Server in your cluster.
+
+Prerequisites
+Debian 8 (jessie)
+apt-get install build-essential git-core libexpat-dev libpcap-dev libjson0-dev libtool automake flex bison libuv-dev
+CentOS v6 & v7 
+
+yum -y install epel-release
+yum -y install git gcc json-c-devel expat-devel libpcap-devel flex-devel automake libtool bison flex libuv-devel
+ 
+
+ 
+
+Install
+cd /usr/src
+git clone https://github.com/sipcapture/captagent.git
+cd captagent
+./build.sh
+./configure
+make && make install
+ 
+
+Configure (You will edit 3 files:)
+socket_pcap.xml - Change RTCP Socket On by enable=true
+nano /usr/local/captagent/etc/captagent/socket_pcap.xml
+<?xml version="1.0"?>
+<document type="captagent_module/xml">
+    <module name="socket_pcap" description="HEP Socket" serial="2014010402">
+    <profile name="socketspcap_sip" description="HEP Socket" enable="true" serial="2014010402">
+        <settings>
+        <param name="dev" value="any"/>
+        <param name="promisc" value="true"/>
+        <param name="reasm" value="false"/>
+        <param name="tcpdefrag" value="false"/>
+        <param name="capture-plan" value="sip_capture_plan.cfg"/>
+        <param name="filter">
+            <value>portrange 5060-5091</value>
+        </param>
+        </settings>
+    </profile>
+    <profile name="socketspcap_rtcp" description="RTCP Socket" enable="true" serial="2014010402">
+        <settings>
+        <param name="dev" value="any"/>
+        <param name="promisc" value="true"/>
+        <param name="reasm" value="false"/>
+        <!-- size in MB -->
+        <param name="ring-buffer" value="20"/>
+        <!-- for rtp && rtcp < 250 -->
+        <param name="snap-len" value="256"/>
+        <param name="capture-filter" value="rtcp"/>
+        <param name="capture-plan" value="rtcp_capture_plan.cfg"/>
+        <param name="filter">
+            <value>portrange 5060-50000 and len >=50 </value>
+        </param>
+        </settings>
+    </profile>
+    </module>
+</document>
+transport_hep.xml - You will make 3 changes here. Change capture-host value to the IP address of your Homer server, change capture-port to 9060 and change your capture-id to a unique number to identify this CaptAgent.
+
+nano /usr/local/captagent/etc/captagent/transport_hep.xml
+<?xml version="1.0"?>
+<document type="captagent_module/xml">
+    <module name="transport_hep" description="HEP Protocol" serial="2014010402">
+    <profile name="hepsocket" description="Transport HEP" enable="true" serial="2014010402">
+        <settings>
+        <param name="version" value="3"/>
+        <param name="capture-host" value="x.x.x.x"/>
+        <param name="capture-port" value="9060"/>
+        <param name="capture-proto" value="udp"/>
+        <param name="capture-id" value="100"/>
+        <param name="capture-password" value="myhep"/>
+        <param name="payload-compression" value="false"/>
+        </settings>
+    </profile>
+    </module>
+</document>
+sip_capture_plan.cfg - Uncomment the if(sip_has_sdp() ) section
+
+nano /usr/local/captagent/etc/captagent/captureplans/sip_capture_plan.cfg
+capture[pcap] {
+
+    # here we can check source/destination IP/port, message size
+    if(msg_check("size", "100")) {
+
+        #Do parsing
+        if(parse_sip()) {
+        #Can be defined many profiles in transport_hep.xml  
+        
+        if(!send_hep("hepsocket")) {
+            clog("ERROR", "Error sending HEP!!!!");
+        }
+        
+        if(sip_has_sdp())
+        {
+          #Activate it for RTCP checks
+          if(!check_rtcp_ipport())
+            {
+              clog("ERROR", "ALREADY EXIST");
+            }
+        }
+
+        #Duplicate all INVITEs to JSON transport
+        # if(sip_is_method() && sip_check("method","INVITE")) {
+        #    #Can be defined many profiles in transport_json.xml
+        #    if(!send_json("jsonsocket")) {
+        #   clog("ERROR", "Error sending JSON!!!");
+        #    }
+        # }
+        }
+    }
+    drop;
+}
+ 
+
+Configure init or systemd and default
+Debian8
+cp /usr/src/captagent/init/deb/jessie/captagent.service /etc/systemd/system/
+cp /usr/src/captagent/init/deb/debian/captagent.default /etc/default/captagent
+systemctl daemon-reload
+systemctl enable captagent
+systemctl start captagent
+CentOS 7
+
+cp /usr/src/captagent/init/el/7/captagent.service /etc/systemd/system/
+cp /usr/src/captagent/init/el/captagent.sysconfig /etc/sysconfig/captagent
+systemctl daemon-reload
+systemctl enable captagent
+systemctl start captagent
+CentOS 6
+
+cp /usr/src/captagent/init/el/6/captagent.init /etc/init.d/captagent 
+cp /usr/src/captagent/init/el/captagent.sysconfig /etc/sysconfig/captagent
+
+# Modify init.d change directory name from "bin" to "sbin"
+nano /etc/init.d/captagent
+APP_FILE=/usr/local/captagent/sbin/$prog
+
+chmod 755 /etc/init.d/captagent
+chkconfig --add captagent
+chkconfig captagent on
+service start captagent
+ 
+
+This should give you a working install of Homer that captures SIP, RTCP and produce QOS reports. Below are screenshots from my install. If you have any issues/questions, post them and I'll do my best to answer.
+
